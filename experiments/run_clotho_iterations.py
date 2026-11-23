@@ -419,7 +419,7 @@ def _class_fit_labels_and_weight(
     return _fit_labels_for_class(reference_set_labels, target_class), sample_weight
 
 
-def main(target_task, target_layer, refset_extension_methods=['random', 'diversity'], scoring_model='GMM', num_add=NUM_ADD, random_seeds=[42], target_llm='llama', verbose=False, covariance_type='diag', dual_gmm=False, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=False, d_schedule=False, d_fail=False, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, max_n_ref=None, n_trials=DEFAULT_N_TRIALS):
+def main(target_task, target_layer, refset_extension_methods=['random', 'diversity'], scoring_model='GMM', num_add=NUM_ADD, random_seeds=[42], target_llm='llama', verbose=False, covariance_type='diag', dual_gmm=True, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=True, d_schedule=True, d_fail=True, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, max_n_ref=None, n_trials=DEFAULT_N_TRIALS):
     em = _em_settings(generous, reg_covar=reg_covar)
     logging.info(
         f"[{datetime.now()}] Starting experiments for target_task={target_task}, target_llm={target_llm}, "
@@ -581,7 +581,7 @@ def main(target_task, target_layer, refset_extension_methods=['random', 'diversi
                 json.dump(iteration_records, f, indent=2)
 
 
-def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_init, labels_target, scoring_model='GMM', dim_reduction_method='pca', refset_extension_method='balanced', random_seed=42, n_iterations=50, max_n_components=50, max_n_features=50, num_add=NUM_ADD, LIH_vis=None, result_suffix='_llama', target_llm=None, plot_intermediate_results=False, verbose=False, covariance_type='diag', dual_gmm=False, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=False, d_schedule=False, d_fail=False, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, n_trials=DEFAULT_N_TRIALS):
+def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_init, labels_target, scoring_model='GMM', dim_reduction_method='pca', refset_extension_method='balanced', random_seed=42, n_iterations=50, max_n_components=50, max_n_features=50, num_add=NUM_ADD, LIH_vis=None, result_suffix='_llama', target_llm=None, plot_intermediate_results=False, verbose=False, covariance_type='diag', dual_gmm=True, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=True, d_schedule=True, d_fail=True, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, n_trials=DEFAULT_N_TRIALS):
     set_global_seed(random_seed)
     LIH = np.concatenate((LIH_target, LIH_init), axis=0)
     labels = np.concatenate((labels_target, labels_init), axis=0)
@@ -3814,16 +3814,17 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--dual_gmm',
-        action='store_true',
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            'Fit separate pass and fail GMMs. PCA n_features is shared (same '
-            'feature space for Bayes); by default pass-side CV chooses D and fail '
+            'Fit separate pass and fail GMMs (default: on). PCA n_features is shared '
+            '(same feature space for Bayes); by default pass-side CV chooses D and fail '
             'follows. Pass --d_fail to choose that shared D with fail-side CV instead. '
             'n_components stay independent per class. Point scores are Bayes posteriors '
             'p(y=pass|x) from the two class-conditional likelihoods '
             '(Pearson / Spearman / ROC-AUC). '
             'GMM fitting figures are saved with _pass / _fail suffixes. '
-            'Default is single pass-only GMM.'
+            'Use --no-dual_gmm for single pass-only GMM.'
         ),
     )
     parser.add_argument(
@@ -3865,27 +3866,31 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--d_schedule',
-        action='store_true',
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            'Monotone PCA-dim schedule: start at '
+            'Monotone PCA-dim schedule (default: on): start at '
             f'{D_SCHEDULE_INIT_N_FEATURES} and only step up by {D_SCHEDULE_FEATURE_STEP} '
             '(never down). HD is accepted only with the old LD gate '
             '(higher mean Pearson and min fold > max(current min fold, 0.1)). '
             'MCMC no longer lowers D on sampling failure. '
             'Compatible with --d_fail (same up-only schedule, fail-GMM CV). '
-            'Incompatible with --d. Result paths get a _dsched suffix.'
+            'Incompatible with --d. Result paths get a _dsched suffix. '
+            'Use --no-d_schedule to disable.'
         ),
     )
     parser.add_argument(
         '--d_fail',
-        action='store_true',
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            'Dual only: choose the shared PCA dim with fail-GMM feature CV '
+            'Dual only (default: on): choose the shared PCA dim with fail-GMM feature CV '
             'instead of pass-GMM CV (pass still uses that same D). '
             'Combines with --d_schedule (monotone up, HD gate on fail CV). '
             'Incompatible with --d. Requires --dual_gmm '
             '(or dual configs under --all_poss_comb). '
-            'Result paths get a _dfail suffix.'
+            'Result paths get a _dfail suffix. '
+            'Use --no-d_fail to disable.'
         ),
     )
     parser.add_argument(
@@ -3905,15 +3910,17 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--reg_decay',
-        action='store_true',
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            'Monotone reg_covar schedule: start at 1e-1 (or --reg_covar) and each '
+            'Monotone reg_covar schedule (default: on): start at 1e-1 (or --reg_covar) and each '
             'iteration compare {λ, λ/10}. Dual GMM uses Bayes p(y=pass|x) vs labels '
             '(same functional as eval, not pass-density ranks). Single GMM still '
             'uses rank-scores. Decay only if mean Pearson is higher and min fold '
             f'> max(current min fold, {CV_MIN_FOLD_FLOOR}) — same gate as PCA-dim '
             'LD / --d_schedule HD. Never increases. Dual fail copies the pass '
-            'value. Result paths get a _regdecay suffix.'
+            'value. Result paths get a _regdecay suffix. '
+            'Use --no-reg_decay to disable.'
         ),
     )
     parser.add_argument(
