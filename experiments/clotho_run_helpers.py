@@ -8,6 +8,7 @@ from dataclasses import replace
 import numpy as np
 import torch
 
+from clotho.metrics.reference_based.density_estimation import MCMCGMMScorerConfig
 from clotho.preprocessing.feature_reduction import PCAFeatureReducer
 from utils import get_gmm_components_perplexity
 

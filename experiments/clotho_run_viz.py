@@ -6,7 +6,12 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
+from clotho.metrics.reference_based.density_estimation import (
+    get_highest_likelihood_gmm_params,
+)
+from clotho.metrics.reference_based.pymc_gmm import diag_gmm_aic_bic
 from plot_utils import (
     plot_gmm_components_on_feature_pca,
     plot_gmm_posterior_draws_on_feature_pca,

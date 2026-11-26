@@ -14,12 +14,14 @@ from clotho.metrics.reference_based.density_estimation import (
     MCMCGMMScorer,
     MCMCGMMScorerConfig,
 )
+from utils import convert_to_normalized_rank_score
 from clotho_run_helpers import (
     BAYES_GMM_MODELS,
     CV_MIN_FOLD_FLOOR,
     FEATURE_STEP,
     INIT_REG_COVAR_CV,
     MAX_REG_COVAR_CV,
+    MIN_N_FEATURES,
     MIN_REG_COVAR_CV,
     PASS_THRESH,
     REG_COVAR_CV_FACTOR,

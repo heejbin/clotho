@@ -108,6 +108,7 @@ from clotho_run_helpers import (
     set_global_seed,
 )
 from clotho_run_cv import (
+    construct_cv_scorer,
     construct_scorer,
     ensure_nonzero_entropy,
     get_next_n_features,
@@ -116,7 +117,7 @@ from clotho_run_cv import (
 from clotho_run_viz import _save_gmm_fitting_figures
 from clotho_run_acquire import acquire_next_reference_indices
 
-def main(target_task, target_layer, refset_extension_methods=['random', 'diversity'], scoring_model='GMM', num_add=NUM_ADD, random_seeds=[42], target_llm='llama', verbose=False, covariance_type='diag', dual_gmm=True, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=True, d_schedule=True, d_fail=True, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, max_n_ref=None, n_trials=DEFAULT_N_TRIALS):
+def main(target_task, target_layer, refset_extension_methods=['random', 'diversity'], scoring_model='GMM', num_add=NUM_ADD, random_seeds=[42], target_llm='llama', verbose=False, covariance_type='diag', dual_gmm=True, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=True, d_schedule=True, d_fail=True, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, max_n_ref=None, n_trials=DEFAULT_N_TRIALS, jax_platform="cpu"):
     em = _em_settings(generous, reg_covar=reg_covar)
     logging.info(
         f"[{datetime.now()}] Starting experiments for target_task={target_task}, target_llm={target_llm}, "
@@ -132,7 +133,7 @@ def main(target_task, target_layer, refset_extension_methods=['random', 'diversi
         f"random_start_sum_double_hard_weighted={random_start_sum_double_hard_weighted}, "
         f"success_rate_weight={success_rate_weight}, "
         f"epistemic_multistart={epistemic_multistart}, epistemic_em_inits={epistemic_em_inits}, "
-        f"max_n_ref={max_n_ref}, n_trials={int(n_trials)}, "
+        f"max_n_ref={max_n_ref}, n_trials={int(n_trials)}, jax_platform={jax_platform}, "
         f"verbose_figure={verbose_figure}, map_score={map_score}, "
         f"refset_extension_methods={refset_extension_methods}, "
         f"random_seeds={random_seeds}, verbose={verbose}"
@@ -264,6 +265,7 @@ def main(target_task, target_layer, refset_extension_methods=['random', 'diversi
                 epistemic_multistart=epistemic_multistart,
                 epistemic_em_inits=epistemic_em_inits,
                 n_trials=n_trials,
+                jax_platform=jax_platform,
             )
 
             result_dir = (
@@ -279,7 +281,7 @@ def main(target_task, target_layer, refset_extension_methods=['random', 'diversi
 
 
 
-def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_init, labels_target, scoring_model='GMM', dim_reduction_method='pca', refset_extension_method='balanced', random_seed=42, n_iterations=50, max_n_components=50, max_n_features=50, num_add=NUM_ADD, LIH_vis=None, result_suffix='_llama', target_llm=None, plot_intermediate_results=False, verbose=False, covariance_type='diag', dual_gmm=True, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=True, d_schedule=True, d_fail=True, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, n_trials=DEFAULT_N_TRIALS):
+def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_init, labels_target, scoring_model='GMM', dim_reduction_method='pca', refset_extension_method='balanced', random_seed=42, n_iterations=50, max_n_components=50, max_n_features=50, num_add=NUM_ADD, LIH_vis=None, result_suffix='_llama', target_llm=None, plot_intermediate_results=False, verbose=False, covariance_type='diag', dual_gmm=True, oracle_prior=False, generous=False, reg_covar=None, n_features=None, fast=False, verbose_figure=False, map_score=False, reg_decay=True, d_schedule=True, d_fail=True, random_100_start=False, random_100_start_weighted=False, random_start_weighted=False, random_start_double_hard_weighted=False, random_start_sum_weighted=False, random_start_sum_double_hard_weighted=False, success_rate_weight=False, epistemic_multistart=False, epistemic_em_inits=4, n_trials=DEFAULT_N_TRIALS, jax_platform="cpu"):
     set_global_seed(random_seed)
     LIH = np.concatenate((LIH_target, LIH_init), axis=0)
     labels = np.concatenate((labels_target, labels_init), axis=0)
@@ -435,7 +437,23 @@ def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_
     mcmc_tune = 500 if fast else 1000
     posterior_every = FAST_POSTERIOR_EVERY if fast else None
     thin_stride = FAST_THIN_STRIDE if fast else None
+    bald_thin_draws = (
+        max(1, mcmc_draws // FAST_THIN_STRIDE) if fast else None
+    )
     if use_mcmc_gmm:
+        _jax_platform = str(jax_platform or 'cpu').lower()
+        if _jax_platform in ('gpu', 'cuda'):
+            _jax_platform = 'cuda'
+        elif _jax_platform != 'cpu':
+            raise ValueError(
+                f'Unsupported jax_platform={jax_platform!r} (use cpu|cuda|gpu)'
+            )
+        # Single-GPU: vectorized chains. Multi-CPU host: parallel pmap.
+        _nuts_kwargs = (
+            {'chain_method': 'vectorized'}
+            if _jax_platform == 'cuda'
+            else {'chain_method': 'parallel'}
+        )
         scorer_config = MCMCGMMScorerConfig(
             n_components=current_n_components,
             random_state=random_seed,
@@ -449,7 +467,13 @@ def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_
             em_centered_prior=not bool(epistemic_multistart),
             epistemic_multistart=bool(epistemic_multistart),
             epistemic_em_inits=int(epistemic_em_inits),
+            jax_platform=_jax_platform,
+            nuts_sampler_kwargs=_nuts_kwargs,
             verbose=verbose,
+        )
+        logging.info(
+            f'[simulate_iterations] JAX/NUTS platform={_jax_platform}, '
+            f'chain_method={_nuts_kwargs.get("chain_method")}'
         )
         if fast:
             logging.info(
@@ -572,6 +596,8 @@ def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_
     for i in tqdm(range(n_iterations), desc="Simulating iterations", position=1, leave=False):
         skip = False
         gmm_collapse_fallback = False
+        # Defaults for skip / collapse paths (scoring block may overwrite).
+        prior_pass, prior_fail = run_prior_pass, run_prior_fail
         n_ref = len(current_reference_set_indices)
         ref_labels_bin = (labels[current_reference_set_indices] > PASS_THRESH).astype(int)
         n_pass_now = int(np.sum(ref_labels_bin == 1))
@@ -1427,8 +1453,10 @@ def simulate_iterations(target_task, target_layer, LIH_init, LIH_target, labels_
         aleatoric_uncertainties = acq['aleatoric_uncertainties']
         posterior_disagreement = acq['posterior_disagreement']
         bald_log_marginal = acq['bald_log_marginal']
-        iteration_record['num_add'] = acq['iter_num_add']
-        iteration_record['effective_sampling_method'] = acq['effective_sampling_method']
+        iter_num_add = int(acq['iter_num_add'])
+        effective_sampling_method = acq['effective_sampling_method']
+        iteration_record['num_add'] = iter_num_add
+        iteration_record['effective_sampling_method'] = effective_sampling_method
         iteration_record['duration_reference_set_extension'] = acq['duration_reference_set_extension']
         iteration_record['duration_total'] = time.time() - start_time
 
@@ -2199,6 +2227,17 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        '--jax_platform',
+        type=str,
+        default='cpu',
+        choices=['cpu', 'cuda', 'gpu'],
+        help=(
+            'JAX device for MCMCGMM/ADVIGMM NUTS/ADVI (default cpu). '
+            'Use cuda|gpu for BlackJAX on GPU; EM/sklearn stays on CPU. '
+            'GPU uses chain_method=vectorized. Does not change result path tags.'
+        ),
+    )
+    parser.add_argument(
         '--epistemic_em_inits',
         type=int,
         default=4,
@@ -2394,6 +2433,12 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.jax_platform in ('gpu', 'cuda'):
+        os.environ['JAX_PLATFORMS'] = 'cuda'
+        os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
+    elif args.jax_platform == 'cpu':
+        os.environ['JAX_PLATFORMS'] = 'cpu'
+
     n0_start_flags = [
         args.random_start_weighted,
         args.random_start_double_hard_weighted,
@@ -2540,7 +2585,7 @@ if __name__ == "__main__":
         f"success_rate_weight={args.success_rate_weight}, "
         f"epistemic_multistart={args.epistemic_multistart}, "
         f"epistemic_em_inits={args.epistemic_em_inits}, "
-        f"max_n_ref={args.max_n_ref}, "
+        f"max_n_ref={args.max_n_ref}, jax_platform={args.jax_platform}, "
         f"verbose_figure={args.verbose_figure}, map_score={args.map_score}, "
         f"all_poss_comb={args.all_poss_comb})"
     )
@@ -2587,4 +2632,5 @@ if __name__ == "__main__":
                 epistemic_em_inits=args.epistemic_em_inits,
                 max_n_ref=args.max_n_ref,
                 n_trials=args.n_trials,
+                jax_platform=args.jax_platform,
             )
